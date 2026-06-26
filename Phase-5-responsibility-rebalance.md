@@ -52,9 +52,12 @@ Accessible adapter 생성은 lazy하게 유지할 수 있다. 예를 들어 acce
 
 현재 코드에도 accessibility 활성 상태 개념은 있다. `org.a11y.Status`의 `IsEnabled` 또는 `ScreenReaderEnabled`가 켜지고 application이 running이면 bridge가 `ForceUp()`되고, 꺼지면 `ForceDown()`된다. 향후 semantics materialization과 Accessible adapter 생성 시점은 이 bridge up/down lifecycle과 맞추는 것이 좋다.
 
+Phase 1에서 `dali-csharp-binder` 호환을 위해 `integration-api` wrapper를 두더라도, 이는 이행용 경로로 본다. Phase 5에서는 binder 내부 구현도 가능하면 semantics/provider contract를 사용하도록 옮기고, binder가 직접 `ControlAccessible`, `ActorAccessible`, AT-SPI feature interface를 상속하거나 호출하는 지점을 줄인다. 단, binder가 외부에 제공하는 C ABI는 유지한다.
+
 ## 완료 기준
 
 - Toolkit/UI는 AT-SPI bridge 세부를 직접 include하지 않는다.
 - Adaptor는 Toolkit의 semantic provider contract만 사용한다.
 - bridge/platform 정책과 UI semantic 산출 책임이 분리된다.
 - `RegisterExternalAccessibleGetter()` 또는 그 대체 contract가 `Accessible` 객체 반환이 아니라 semantic provider 조회로 바뀐다.
+- `dali-csharp-binder`의 C ABI는 유지하되, 내부 DALi accessibility 접근은 새 contract로 이행할 수 있다.

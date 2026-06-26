@@ -53,12 +53,32 @@ App 개발자는 semantics 객체를 직접 만들어 `Set`하지 않고, Contro
 
 Component가 기본 role/state/action을 정의해야 하는 경우에도 semantics 객체 생성을 강제하기보다, 기본값 provider 또는 static/default metadata로 표현하고 accessibility가 실제로 필요해질 때 materialize하는 방향이 좋다.
 
+## 현재 코드 기준
+
+`dali-toolkit/internal/controls/control/control-accessibility-data.h`의 `Control::AccessibilityData`는 이미 내부 lazy storage 역할을 하고 있다. name, description, value, automation id, hidden, highlightable, scrollable, modal, states, attributes, relations, reading info type, accessibility signal을 보관하고, `GetOrCreateAccessibilityData()`를 통해 필요할 때 생성된다.
+
+따라서 Phase 2에서 완전히 새 저장소를 만들 필요는 낮다. 현재 구조는 새 `AccessibilityData` 또는 `AccessibilitySemantics` public/devel API의 내부 구현 기반으로 재사용할 수 있다.
+
+`dali-toolkit`에서는 기존 `DevelControl::Property::ACCESSIBILITY_NAME`, `ACCESSIBILITY_ROLE` 같은 property enum value를 유지한다. 이 값들은 `dali-csharp-binder`/NUI 호환을 위한 stable identifier로 보고, 실제 저장과 처리만 새 AccessibilityData/Semantics 경로로 위임한다.
+
+`dali-ui`는 binder ABI 호환 책임이 없으므로 가능한 한 새 AccessibilityData/Semantics API에서만 설정하도록 정리한다. 그래도 toolkit과 ui의 의미 모델은 동일하게 맞추고, 차이는 compatibility layer 유무 정도로 제한한다.
+
+다만 현재 `Control::AccessibilityData`는 아직 최종 semantics model은 아니다.
+
+- `ControlAccessible`에 friend로 열려 있고 `GetAccessibleObject()`를 통해 adaptor `Accessible` 계열을 직접 조회한다.
+- highlight 위치 감시, property set 감시, AT-SPI event emit 보조 등 bridge에 가까운 책임도 일부 포함한다.
+- state와 reading info type에 adaptor의 bitset 타입이 직접 섞여 있다.
+
+그래서 Phase 2에서는 이 타입을 그대로 외부에 노출하기보다, 얇은 toolkit/ui-facing handle API를 만들고 내부에서 현재 `Control::AccessibilityData`에 위임하는 방향이 안전하다. `Accessible` 의존 제거와 책임 재배치는 Phase 5에서 진행한다.
+
 ## 완료 기준
 
 - App 개발자가 접근성 속성을 새 object API로 설정할 수 있다.
 - 기존 property API와 동일한 결과가 나온다.
 - Toolkit과 dali-ui가 같은 개념 모델을 공유한다.
 - AT-SPI 타입명이 app-facing API에 드러나지 않는다.
+- 기존 internal `Control::AccessibilityData`를 재사용하되 외부 API와 adaptor 의존을 직접 노출하지 않는다.
+- `dali-toolkit`의 legacy property enum/value와 binder ABI는 유지되고, `dali-ui`는 새 API 중심으로 동작한다.
 
 ## As-Is Diagram
 

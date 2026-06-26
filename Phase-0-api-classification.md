@@ -4,6 +4,26 @@
 
 현재 Accessibility 관련 API를 먼저 분류한다. 이 단계에서는 동작을 바꾸지 않고, 어떤 API가 누구를 위한 계약인지 명확히 한다.
 
+## 보고 요약
+
+현재 구조의 핵심 문제는 `dali-adaptor devel-api`에 app-facing API, Toolkit/UI 연동 contract, DBus/AT-SPI bridge 내부 API가 섞여 있다는 점이다. 이 때문에 App 개발자, Toolkit/UI component 개발자, adaptor bridge 구현자가 각각 어느 API에 의존해야 하는지 경계가 흐리다.
+
+목표 방향은 다음과 같다.
+
+- App은 `dali-toolkit`/`dali-ui`의 AccessibilityData 또는 AccessibilitySemantics API를 사용한다.
+- Toolkit/UI는 `dali-adaptor integration-api`의 최소 contract만 사용한다.
+- `dali-adaptor`는 DBus/AT-SPI bridge, object registry, Accessible adapter 소유와 구현을 담당한다.
+- `dali-csharp-binder`/NUI ABI는 유지하고, 필요한 경우 compatibility wrapper를 둔다.
+
+단계적 접근은 다음과 같다.
+
+- Phase 0: 현재 API를 `public`, `toolkit-needed`, `bridge-internal`, `diagnostic`으로 분류한다.
+- Phase 1: adaptor API 노출을 줄이고, 기존 devel include는 deprecated wrapper로 유지한다.
+- Phase 2~3: Toolkit/UI에 새 AccessibilityData/Semantics API를 추가하고, 기존 property API를 새 API로 위임한다.
+- Phase 5~6: Accessible ownership을 adaptor로 옮기고, AT-SPI adapter 의존을 내부화한다.
+
+리스크 제어를 위해 Phase 1에서는 `Accessible` ownership과 `RegisterExternalAccessibleGetter()` contract를 변경하지 않는다. 해당 구조 변경은 Phase 5에서 수행한다.
+
 ## 분류 기준
 
 - `public`: App 개발자가 직접 사용하는 안정 API.
@@ -26,6 +46,10 @@
 `Accessible`, `Action`, `Text`, `Value`, `Selection` 계열은 Toolkit/UI 구현에 쓰이고 있으므로 app-facing API인지 internal contract인지 구분해야 한다.
 
 현재 Toolkit/UI는 adaptor header를 단순 include하는 수준을 넘어서 `ControlAccessible`/`ViewAccessible`이 `ActorAccessible`을 상속하고 `Dali::Accessibility::States` 같은 AT-SPI 쪽 signature를 직접 구현한다. 따라서 Phase 0에서는 header 위치뿐 아니라 상속, 반환 타입, callback contract까지 함께 분류해야 한다.
+
+모듈별 호환성 책임은 다르게 본다. `dali-core`와 `dali-adaptor`는 공용 기반이므로 노출 API를 보수적으로 정리하고, `dali-toolkit`은 `dali-csharp-binder`/NUI 호환성을 유지해야 한다. 반면 `dali-ui`는 binder ABI 호환 책임이 없으므로 새 Accessibility API 중심으로 더 과감하게 정리할 수 있다.
+
+다만 `dali-toolkit`과 `dali-ui`를 완전히 다른 모델로 개발하지는 않는다. 가능한 한 같은 Accessibility semantics 모델을 공유하고, 호환이 필요한 일부 경로만 `integration-api` wrapper 또는 legacy property delegation으로 유지한다.
 
 ## 완료 기준
 
