@@ -4,6 +4,35 @@
 
 현재 Accessibility 관련 API를 먼저 분류한다. 이 단계에서는 동작을 바꾸지 않고, 어떤 API가 누구를 위한 계약인지 명확히 한다.
 
+## 해결해야 할 문제
+
+- API 계층 혼재
+  - `dali-adaptor devel-api`에 app-facing API, Toolkit/UI 연동 contract, DBus/AT-SPI bridge 내부 API, diagnostic API가 함께 노출되어 있다.
+  - 그 결과 App 개발자, Component 개발자, Toolkit/UI 구현, adaptor bridge 구현이 각각 어느 API에 의존해야 하는지 경계가 흐리다.
+
+- Toolkit/UI와 adaptor의 강한 결합
+  - Toolkit/UI는 semantic 정보만 제공하면 되는 계층이어야 하지만, 현재는 `ControlAccessible`/`ViewAccessible`이 adaptor의 `ActorAccessible`을 상속하고 AT-SPI 스타일 타입을 직접 사용한다.
+  - 최종적으로는 Toolkit/UI가 Accessibility semantics를 제공하고, `Accessible` 객체 생성과 bridge 변환은 adaptor가 담당하도록 분리해야 한다.
+
+- Toolkit-adaptor interface 과다 노출
+  - `accessibility-bitset.h` 같은 helper type이 `States`, `ReadingInfoTypes`, `AtspiInterfaces`의 기반 타입으로 공개되어 있다.
+  - Toolkit/UI가 알아야 하는 최소 contract인지, adaptor 내부 helper인지 재분류해야 한다.
+
+- `accessibility.h`/`accessibility.cpp`의 구조적 문제
+  - `accessibility.h`에는 `Role` 같은 public semantic enum, `AtspiEvent` 같은 bridge/backend 타입, `Address` 같은 class, public data member struct가 한 파일에 섞여 있다.
+  - `Address`는 `std::string` member를 직접 가진 concrete class라 DALi public API의 p-impl/BaseHandle 방식과 맞지 않는다.
+  - `Point`, `Size`, `Range`, `GestureInfo`, `Relation`, `ActionInfo` 같은 struct는 public에 남길 경우 필드 변경이 ABI/API에 직접 영향을 준다.
+  - `Relation`처럼 public header에서 `Accessible*`를 노출하는 타입은 public semantic API와 adaptor 내부 accessibility object 모델을 결합시킨다.
+  - `accessibility.cpp`는 `Address`, `Accessible`, `Bridge`, 내부 `AdaptorAccessible` 구현을 함께 담고 있어 header/source 책임과 API 계층 경계가 불명확하다.
+
+- public API ABI 안정성
+  - public-api로 나가는 class는 DALi public API 규칙에 맞게 p-impl/BaseHandle/BaseObject 구조를 검토해야 한다.
+  - 단순 enum이라도 app-facing semantic enum인지, Toolkit-only enum인지, bridge/internal enum인지 분리해야 한다.
+
+- 호환성 책임 차이
+  - `dali-core`와 `dali-adaptor`는 공용 기반이므로 public ABI를 보수적으로 지켜야 한다.
+  - `dali-toolkit`은 `dali-csharp-binder`/NUI ABI 호환성을 고려해야 하지만, `dali-ui`는 상대적으로 새 API 중심으로 더 과감하게 정리할 수 있다.
+
 ## 보고 요약
 
 현재 구조의 핵심 문제는 `dali-adaptor devel-api`에 app-facing API, Toolkit/UI 연동 contract, DBus/AT-SPI bridge 내부 API가 섞여 있다는 점이다. 이 때문에 App 개발자, Toolkit/UI component 개발자, adaptor bridge 구현자가 각각 어느 API에 의존해야 하는지 경계가 흐리다.
@@ -13,12 +42,12 @@
 - App은 `dali-toolkit`/`dali-ui`의 AccessibilityData 또는 AccessibilitySemantics API를 사용한다.
 - Toolkit/UI는 `dali-adaptor integration-api`의 최소 contract만 사용한다.
 - `dali-adaptor`는 DBus/AT-SPI bridge, object registry, Accessible adapter 소유와 구현을 담당한다.
-- `dali-csharp-binder`/NUI ABI는 유지하고, 필요한 경우 compatibility wrapper를 둔다.
+- `dali-csharp-binder`/NUI ABI는 유지하고, 필요한 경우 제한된 integration contract를 둔다.
 
 단계적 접근은 다음과 같다.
 
 - Phase 0: 현재 API를 `public`, `toolkit-needed`, `bridge-internal`, `diagnostic`으로 분류한다.
-- Phase 1: adaptor API 노출을 줄이고, 기존 devel include는 deprecated wrapper로 유지한다.
+- Phase 1: adaptor API 노출을 줄이고, include 사용처를 public/integration 경로로 직접 정리한다.
 - Phase 2~3: Toolkit/UI에 새 AccessibilityData/Semantics API를 추가하고, 기존 property API를 새 API로 위임한다.
 - Phase 5~6: Accessible ownership을 adaptor로 옮기고, AT-SPI adapter 의존을 내부화한다.
 
@@ -49,13 +78,13 @@
 
 모듈별 호환성 책임은 다르게 본다. `dali-core`와 `dali-adaptor`는 공용 기반이므로 노출 API를 보수적으로 정리하고, `dali-toolkit`은 `dali-csharp-binder`/NUI 호환성을 유지해야 한다. 반면 `dali-ui`는 binder ABI 호환 책임이 없으므로 새 Accessibility API 중심으로 더 과감하게 정리할 수 있다.
 
-다만 `dali-toolkit`과 `dali-ui`를 완전히 다른 모델로 개발하지는 않는다. 가능한 한 같은 Accessibility semantics 모델을 공유하고, 호환이 필요한 일부 경로만 `integration-api` wrapper 또는 legacy property delegation으로 유지한다.
+다만 `dali-toolkit`과 `dali-ui`를 완전히 다른 모델로 개발하지는 않는다. 가능한 한 같은 Accessibility semantics 모델을 공유하고, 호환이 필요한 일부 경로만 `integration-api` contract 또는 legacy property delegation으로 유지한다.
 
 ## 완료 기준
 
 - 모든 accessibility header가 네 분류 중 하나로 태깅된다.
 - public으로 유지할 API와 내릴 API 목록이 정리된다.
-- deprecated wrapper가 필요한 API 목록이 정리된다.
+- integration contract로 유지할 API 목록이 정리된다.
 - Toolkit/UI가 실제로 필요로 하는 adaptor API 최소 목록이 나온다.
 
 ## Overall Architecture
@@ -119,7 +148,7 @@ flowchart TD
   Diagnostic -. debug/test/export only .-> BridgeInternal
 ```
 
-이 구조의 장점은 App, Toolkit/UI, adaptor bridge, diagnostic의 책임과 API 안정성 수준을 분리할 수 있다는 점이다. 이후 Phase에서 실제 header 이동이나 deprecated wrapper를 적용할 때 어느 경계를 지켜야 하는지 기준이 된다.
+이 구조의 장점은 App, Toolkit/UI, adaptor bridge, diagnostic의 책임과 API 안정성 수준을 분리할 수 있다는 점이다. 이후 Phase에서 실제 header 이동이나 integration contract를 적용할 때 어느 경계를 지켜야 하는지 기준이 된다.
 
 - 관계 설명
   - `App --> dali-toolkit / dali-ui public API`: 일반 앱 개발자의 기본 접근 경로다. 접근성 속성 설정은 이 계층에서 해결되어야 한다.

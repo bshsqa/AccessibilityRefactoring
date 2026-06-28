@@ -4,14 +4,38 @@
 
 `dali-adaptor`에 열려 있는 Accessibility C++ API를 줄인다. 특히 `dali-adaptor`와 `dali-toolkit`/`dali-ui` 사이 interface를 최대한 얇게 만든다. 외부 프로세스의 런타임 계약은 DBus/AT-SPI이므로, C++ devel API에 bridge 구현 세부가 넓게 노출되지 않도록 한다.
 
+## 해결해야 할 문제
+
+- devel-api 중심의 넓은 노출
+  - 현재 Accessibility 관련 enum, helper, bridge API, AT-SPI interface가 `dali-adaptor devel-api`에 넓게 노출되어 있다.
+  - Phase 1에서는 app-facing 안정 API는 `public-api`, Toolkit/UI 연동용 최소 contract는 `integration-api`, 나머지 구현 세부는 internal 또는 Phase 5 잔여 devel API로 분리한다.
+
+- Toolkit-adaptor interface 과다
+  - Toolkit/UI가 adaptor 내부 타입 전체를 알 필요는 없지만, 현재는 `accessibility-bitset.h`, `States`, AT-SPI feature interface 같은 타입을 직접 include하거나 상속한다.
+  - Phase 1에서는 큰 ownership 변경 없이도 제거 가능한 helper, enum, include 의존성을 줄인다.
+
+- `accessibility.h`/`accessibility.cpp`의 구조적 문제
+  - `accessibility.h`는 public semantic enum, bridge/backend enum, helper struct, concrete class가 섞인 과도한 header다.
+  - `Role`처럼 app/toolkit public API에서 쓰는 일반 enum은 public 후보로 남기고, `AtspiEvent`, `AtspiInterface`, `ScreenRelativeMoveType` 같은 bridge/toolkit-needed 타입은 integration/internal 후보로 내린다.
+  - `Address`처럼 public ABI 규칙에 맞지 않는 concrete class와 public data member struct는 public 유지 여부와 p-impl/handle 구조 필요성을 검토한다.
+  - `accessibility.cpp`는 여러 header와 여러 책임의 구현을 담고 있으므로, Phase 1에서 가능한 범위에서는 internal 구현 또는 책임별 source로 분리한다.
+
+- binder/NUI 호환성
+  - `dali-csharp-binder`가 제공하는 C ABI는 유지해야 한다.
+  - binder가 여전히 필요한 adaptor 접근은 app-facing public API로 노출하지 않고, 제한된 `integration-api` contract로 맞춘다.
+
+- Phase 5 대상과의 경계
+  - `Accessible` ownership, `ActorAccessible` 상속 구조, `RegisterExternalAccessibleGetter()` contract 변경은 Phase 5에서 처리한다.
+  - Phase 1은 해당 구조를 보존한 상태에서 API 노출 범위와 include 경계를 최대한 줄이는 단계다.
+
 ## 작업 방향
 
 - App 개발자에게 필요한 안정 API만 `public-api` 후보로 둔다.
 - Toolkit/UI 연동에 필요한 최소 타입과 함수만 별도 contract로 남긴다.
 - `accessibility-bitset.h` 같은 helper type은 toolkit-adaptor 경계에서 원칙적으로 제거한다.
 - AT-SPI bridge 구현체, DBus object, object registry, diagnostic helper는 internal 또는 integration 영역으로 내린다.
-- `dali-csharp-binder` 호환 때문에 필요한 API는 임시로 `integration-api` 또는 deprecated devel wrapper에 남긴다.
-- 기존 devel API는 바로 삭제하지 않고 deprecated wrapper를 둔다.
+- `dali-csharp-binder` 호환 때문에 필요한 API는 제한된 `integration-api` contract로 남긴다.
+- 기존 devel API는 Phase 5 대상 잔여 API만 남기고, include 사용처는 새 public/integration 경로로 옮긴다.
 
 ## public 후보
 
@@ -52,32 +76,32 @@
 
 1. 현재 accessibility header와 binder 사용 API를 `public`, `integration`, `internal`, `diagnostic`으로 태깅한다.
 2. app-facing으로 남길 enum/type과 screen reader control API를 먼저 확정한다.
-3. binder/toolkit이 필요한 비공개성 API는 `integration-api` compatibility wrapper로 제공한다.
-4. 기존 `devel-api` include 경로는 deprecated forwarding header로 유지한다.
+3. binder/toolkit이 필요한 비공개성 API는 `integration-api` contract로 제공한다.
+4. 기존 `devel-api` include 경로는 새 public/integration 경로로 직접 수정한다.
 5. `dali-toolkit`, `dali-ui`, `dali-csharp-binder` include를 가능한 범위에서 새 위치로 옮긴다.
 6. `Accessible` ownership, `RegisterExternalAccessibleGetter()` contract, `NUIViewAccessible` 상속 구조 변경은 Phase 5로 넘긴다.
 
 ## 주의점
 
-현재 Toolkit/UI가 adaptor의 AT-SPI 타입을 직접 상속하거나 include하는 지점이 많다. API 위치만 옮기면 빌드가 깨지므로, wrapper 또는 compatibility include를 먼저 둬야 한다.
+현재 Toolkit/UI가 adaptor의 AT-SPI 타입을 직접 상속하거나 include하는 지점이 많다. API 위치만 옮기면 빌드가 깨지므로, 새 public/integration 경로와 필요한 최소 contract를 먼저 맞춰야 한다.
 
-Phase 1의 목표는 단순히 header 위치를 바꾸는 것이 아니라 Toolkit/UI가 알아야 하는 adaptor type 수를 줄이는 것이다. 예를 들어 `States`, `ReadingInfoTypes`, `AtspiInterfaces`를 위해 노출된 `accessibility-bitset.h`는 가능한 한 Toolkit/UI 경계에서 제거한다. 단, `dali-csharp-binder` 호환 때문에 당장 필요한 경우에는 임시 compatibility API로만 유지한다.
+Phase 1의 목표는 단순히 header 위치를 바꾸는 것이 아니라 Toolkit/UI가 알아야 하는 adaptor type 수를 줄이는 것이다. 예를 들어 `States`, `ReadingInfoTypes`, `AtspiInterfaces`를 위해 노출된 `accessibility-bitset.h`는 가능한 한 Toolkit/UI 경계에서 제거한다. 단, `dali-csharp-binder` 호환 때문에 당장 필요한 경우에는 제한된 integration contract로만 유지한다.
 
 Phase 1은 `Accessible` ownership이나 `RegisterExternalAccessibleGetter()` contract를 변경하지 않는다. 해당 구조 변경은 Phase 5에서 수행한다. Phase 1에서는 기존 구조를 보존한 상태로 API 노출 범위만 축소한다.
 
 `dali-csharp-binder`는 NUI ABI를 유지해야 하므로 별도 호환 경로가 필요하다.
 
 - binder가 사용하는 기존 C ABI 함수 이름과 signature는 유지한다.
-- binder 내부 구현이 여전히 필요한 adaptor 타입은 `integration-api` compatibility wrapper를 통해 임시로 제공할 수 있다.
-- wrapper는 신규 app-facing API가 아니라 binder/toolkit 이행용 contract로 취급한다.
-- wrapper는 기존 header를 단순히 다시 public surface로 노출하는 형태가 되지 않도록, 사용 주체와 제거 시점을 명시한다.
+- binder 내부 구현이 여전히 필요한 adaptor 타입은 `integration-api` contract를 통해 제공한다.
+- integration contract는 신규 app-facing API가 아니라 binder/toolkit 이행용 contract로 취급한다.
+- integration contract는 기존 header를 단순히 다시 public surface로 노출하는 형태가 되지 않도록, 사용 주체와 제거 시점을 명시한다.
 
 ## 완료 기준
 
 - app-facing header에서 bridge 구현 세부가 제거된다.
 - Toolkit/UI가 사용하는 최소 adaptor contract가 문서화된다.
 - `accessibility-bitset.h` 같은 helper type은 toolkit-adaptor 경계에서 제거되거나 compatibility 목적으로만 남는다.
-- 기존 include 경로는 deprecated 상태로 일정 기간 유지된다.
+- 기존 include 경로는 가능한 한 새 public/integration 경로로 직접 수정된다.
 - `dali-csharp-binder`가 제공하는 C ABI를 유지한 채 빌드 가능한 호환 경로가 있다.
 
 ## As-Is Diagram
@@ -120,7 +144,7 @@ flowchart TD
   Binder[dali-csharp-binder]
   AdaptorPublic[dali-adaptor public-api<br/>small stable API]
   AdaptorIntegration[dali-adaptor integration-api<br/>toolkit-needed contract]
-  AdaptorDeprecated[dali-adaptor devel-api<br/>deprecated compatibility headers]
+  AdaptorDevel[dali-adaptor devel-api<br/>Phase 5 remaining APIs only]
   AdaptorInternal[dali-adaptor internal<br/>accessibility implementation]
   DBusBridge[DBus / AT-SPI Bridge]
 
@@ -128,12 +152,11 @@ flowchart TD
   App -. limited direct use .-> AdaptorPublic
   Toolkit --> AdaptorPublic
   Toolkit --> AdaptorIntegration
-  Binder -. compatibility only .-> AdaptorDeprecated
+  Binder -. compatibility contract .-> AdaptorIntegration
   AdaptorPublic --> AdaptorInternal
   AdaptorIntegration --> AdaptorInternal
   AdaptorInternal --> DBusBridge
-  AdaptorDeprecated -. forwards temporarily .-> AdaptorPublic
-  AdaptorDeprecated -. forwards temporarily .-> AdaptorIntegration
+  AdaptorDevel -. not expanded in Phase 1 .-> AdaptorInternal
 ```
 
 이 구조의 장점은 사용자 API, Toolkit/UI 연동 API, adaptor 내부 로직을 분리한다는 점이다. `integration-api`는 API 경계이고, `internal`은 API가 아니라 실제 bridge/object registry/event 처리 로직이다.
@@ -141,10 +164,10 @@ flowchart TD
 - 모듈 설명
   - `App Code`: 기본적으로 `dali-toolkit / dali-ui` API를 통해 accessibility를 설정한다.
   - `dali-toolkit / dali-ui`: app-facing UI 계층이며 component 구현 코드를 포함한다. 공용 안정 API와 toolkit-needed contract를 사용한다.
-  - `dali-csharp-binder`: NUI ABI 호환을 위해 기존 devel include 경로를 임시로 사용할 수 있는 binder 계층이다.
+  - `dali-csharp-binder`: NUI ABI 호환을 유지해야 하는 binder 계층이다. 필요한 adaptor 접근은 가능한 한 integration-api contract로 맞춘다.
   - `dali-adaptor public-api`: app이나 framework가 제한적으로 직접 사용할 수 있는 작고 안정적인 API다. 예를 들어 semantic enum, enabled 상태 조회, 제한적인 screen reader control API가 후보가 될 수 있다.
-  - `dali-adaptor integration-api`: Toolkit/UI가 adaptor와 연동하기 위해 사용하는 최소 contract다. binder도 이행 후 이 contract를 사용할 수 있지만, Phase 1에서는 deprecated compatibility header를 통해 임시로 접근할 수 있다. app-facing public API가 아니다.
-  - `dali-adaptor devel-api`: 기존 include 경로 호환을 위한 deprecated forwarding layer다.
+  - `dali-adaptor integration-api`: Toolkit/UI가 adaptor와 연동하기 위해 사용하는 최소 contract다. binder도 ABI 유지를 위해 이 contract를 사용할 수 있다. app-facing public API가 아니다.
+  - `dali-adaptor devel-api`: Phase 1에서 아직 건드리지 않는 `Accessible` ownership, `ActorAccessible`, AT-SPI interface 등 Phase 5 대상 API만 남기는 영역이다.
   - `dali-adaptor internal`: `Accessible`, `ActorAccessible`, object registry, DBus/AT-SPI bridge 구현 등 실제 로직이 위치하는 영역이다.
 
 - 관계 설명
@@ -152,6 +175,6 @@ flowchart TD
   - `App -. limited direct use .-> dali-adaptor public-api`는 예외적으로 필요한 작은 안정 API만 허용한다는 의미다.
   - `Toolkit --> dali-adaptor public-api`는 Toolkit/UI도 공용 semantic enum이나 enabled 상태 조회 같은 안정 API를 사용할 수 있다는 의미다.
   - `Toolkit --> dali-adaptor integration-api`는 Toolkit/UI가 adaptor 내부 타입 전체가 아니라 최소 contract만 사용한다는 의미다.
-  - `dali-csharp-binder -. compatibility only .-> deprecated compatibility headers`는 binder ABI 유지를 위한 임시 호환 경로다. 새 app-facing API가 아니다.
+  - `dali-csharp-binder -. compatibility contract .-> integration-api`는 binder ABI 유지를 위한 제한된 연동 경로다. 새 app-facing API가 아니다.
   - `public-api`와 `integration-api`는 모두 `dali-adaptor internal` 구현으로 연결되지만, 외부에 노출되는 경계는 서로 다르다.
-  - `deprecated compatibility headers`는 영구 API가 아니라 기존 devel include를 새 위치로 임시 forwarding하기 위한 경로다.
+  - `devel-api`에 남은 accessibility API는 Phase 5 구조 변경 전까지의 잔여 API로 본다. Phase 1에서 새 compatibility forwarding layer를 늘리지 않는다.
